@@ -1,0 +1,129 @@
+:root {
+  font-family: "SF Pro Display", "Segoe UI", sans-serif;
+  color: #ecf4ff;
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 18px;
+  background:
+    radial-gradient(circle at top, rgba(72, 179, 255, 0.24), transparent 42%),
+    linear-gradient(180deg, rgba(8, 20, 36, 0.96), rgba(3, 8, 16, 0.96));
+}
+
+.overlay-card {
+  display: flex;
+  min-height: calc(100vh - 36px);
+  flex-direction: column;
+  gap: 18px;
+  border: 1px solid rgba(125, 177, 255, 0.2);
+  border-radius: 28px;
+  padding: 22px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.32);
+  background: rgba(6, 16, 30, 0.84);
+}
+
+.overlay-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.overlay-header h1,
+.result-panel h2 {
+  margin: 4px 0 0;
+}
+
+.eyebrow,
+.panel-label {
+  margin: 0;
+  color: #8bb8ff;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-pill,
+.command-panel,
+.result-panel,
+.image-grid img {
+  border-radius: 20px;
+}
+
+.status-pill {
+  display: inline-flex;
+  width: fit-content;
+  padding: 8px 14px;
+  background: rgba(95, 193, 255, 0.14);
+  color: #89d6ff;
+}
+
+.command-panel,
+.result-panel {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.actions {
+  display: flex;
+}
+
+.actions button {
+  width: 100%;
+}
+
+.primary-button,
+.ghost-button {
+  cursor: pointer;
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 18px;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, #52b8ff, #1d7bff);
+  color: #07111d;
+  font-weight: 700;
+}
+
+.ghost-button {
+  background: rgba(255, 255, 255, 0.08);
+  color: #dce8ff;
+}
+
+.error-text {
+  margin: 0;
+  color: #ff9d9d;
+}
+
+.result-panel ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.image-grid img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+}

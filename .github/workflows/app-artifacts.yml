@@ -1,0 +1,44 @@
+name: Jarvis Desktop Artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "jarvis-app-v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app bundles
+        run: npm run build
+
+      - name: Upload renderer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-renderer-${{ matrix.os }}
+          path: dist
+
+      - name: Upload electron bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-electron-${{ matrix.os }}
+          path: dist-electron
