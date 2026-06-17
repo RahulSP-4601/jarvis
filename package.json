@@ -9,9 +9,9 @@
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip",
-    "dist:win": "npm run build && electron-builder --win nsis zip",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis zip --publish never",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "test": "vitest run"
