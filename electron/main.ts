@@ -1,10 +1,38 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, screen } from "electron";
+import {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  screen,
+  shell,
+  systemPreferences
+} from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged;
+const setupStateFile = path.join(app.getPath("userData"), "jarvis-state.json");
+
+type SetupState = {
+  setupComplete: boolean;
+};
+
+function readSetupState(): SetupState {
+  try {
+    const payload = fs.readFileSync(setupStateFile, "utf8");
+    return JSON.parse(payload) as SetupState;
+  } catch {
+    return { setupComplete: false };
+  }
+}
+
+function writeSetupState(nextState: SetupState) {
+  fs.mkdirSync(path.dirname(setupStateFile), { recursive: true });
+  fs.writeFileSync(setupStateFile, JSON.stringify(nextState, null, 2), "utf8");
+}
 
 function getOverlaySize() {
   const width = Number(process.env.JARVIS_OVERLAY_WIDTH || 460);
@@ -69,6 +97,27 @@ function registerShortcuts(window: BrowserWindow) {
   });
 }
 
+function getMicrophoneStatus() {
+  if (process.platform !== "darwin") {
+    return "unknown";
+  }
+
+  return systemPreferences.getMediaAccessStatus("microphone");
+}
+
+function openMicrophoneSettings() {
+  if (process.platform === "darwin") {
+    void shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+    );
+    return;
+  }
+
+  if (process.platform === "win32") {
+    void shell.openExternal("ms-settings:privacy-microphone");
+  }
+}
+
 app.whenReady().then(() => {
   if (process.platform === "darwin") {
     app.dock.hide();
@@ -79,6 +128,7 @@ app.whenReady().then(() => {
   });
 
   const overlayWindow = createOverlayWindow();
+  const setupState = readSetupState();
   registerShortcuts(overlayWindow);
 
   ipcMain.handle("jarvis:show-overlay", () => {
@@ -90,8 +140,45 @@ app.whenReady().then(() => {
     overlayWindow.hide();
   });
 
+  ipcMain.handle("jarvis:get-bootstrap-state", () => {
+    return {
+      setupComplete: readSetupState().setupComplete,
+      microphoneStatus: getMicrophoneStatus()
+    };
+  });
+
+  ipcMain.handle("jarvis:request-microphone-access", async () => {
+    if (process.platform !== "darwin") {
+      return true;
+    }
+
+    return systemPreferences.askForMediaAccess("microphone");
+  });
+
+  ipcMain.handle("jarvis:open-microphone-settings", () => {
+    openMicrophoneSettings();
+  });
+
+  ipcMain.handle("jarvis:mark-setup-complete", () => {
+    writeSetupState({ setupComplete: true });
+    overlayWindow.show();
+    overlayWindow.focus();
+  });
+
+  ipcMain.handle("jarvis:reset-setup", () => {
+    writeSetupState({ setupComplete: false });
+    overlayWindow.show();
+    overlayWindow.focus();
+  });
+
   overlayWindow.once("ready-to-show", () => {
-    overlayWindow.hide();
+    if (setupState.setupComplete) {
+      overlayWindow.hide();
+      return;
+    }
+
+    overlayWindow.show();
+    overlayWindow.focus();
   });
 });
 

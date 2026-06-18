@@ -1,6 +1,8 @@
 {
   "name": "jarvis-app",
   "version": "0.1.0",
+  "description": "Voice-first desktop chief of staff for research and decision support.",
+  "author": "Jarvis",
   "private": true,
   "main": "dist-electron/main.js",
   "type": "module",
@@ -50,6 +52,10 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Jarvis uses the microphone to hear your requests and help with voice-first research.",
+        "NSSpeechRecognitionUsageDescription": "Jarvis uses speech recognition to understand your spoken commands."
+      },
       "target": [
         "dmg",
         "zip"

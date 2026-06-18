@@ -27,6 +27,14 @@ declare global {
     jarvisDesktop: {
       showOverlay: () => Promise<void>;
       hideOverlay: () => Promise<void>;
+      getBootstrapState: () => Promise<{
+        setupComplete: boolean;
+        microphoneStatus: string;
+      }>;
+      requestMicrophoneAccess: () => Promise<boolean>;
+      openMicrophoneSettings: () => Promise<void>;
+      markSetupComplete: () => Promise<void>;
+      resetSetup: () => Promise<void>;
     };
   }
 }
