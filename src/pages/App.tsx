@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
+import { AuthView } from "../components/AuthView";
 import { OverlayCard } from "../components/OverlayCard";
 import { VoiceOrb } from "../components/VoiceOrb";
+import { useAuthSession } from "../hooks/useAuthSession";
 import { useVoiceSession } from "../hooks/useVoiceSession";
+import { fetchBootstrap } from "../services/bootstrap";
+import type { BootstrapResponse } from "../types/bootstrap";
 
-type BootstrapState = "loading" | "setup" | "ready";
+type BootstrapState = "loading" | "auth" | "bootstrap" | "setup" | "ready";
 type SurfaceMode = "hidden" | "orb" | "overlay";
 
 function getStateLabel(state: string) {
@@ -103,37 +107,66 @@ export function App() {
   const [bootstrapState, setBootstrapState] = useState<BootstrapState>("loading");
   const [microphoneStatus, setMicrophoneStatus] = useState("unknown");
   const [setupError, setSetupError] = useState("");
-  const { voiceState, surfaceMode, transcript, result, error, dismissSurface } = useVoiceSession(
+  const [bootstrapPayload, setBootstrapPayload] = useState<BootstrapResponse | null>(null);
+  const [bootstrapError, setBootstrapError] = useState("");
+  const {
+    error: authError,
+    isBusy: isAuthBusy,
+    isConfigured: isAuthConfigured,
+    session,
+    signInWithGoogle,
+    signOut
+  } = useAuthSession();
+  const {
+    voiceState,
+    surfaceMode,
+    transcript,
+    result,
+    error,
+    nativeWakeEnabled,
+    nativeWakeStatus,
+    dismissSurface,
+    activateListening
+  } = useVoiceSession(
     bootstrapState === "ready"
   );
+  const isGoogleEnabled = bootstrapPayload?.features.googleOAuthEnabled ?? true;
 
   useEffect(() => {
     void loadBootstrapState();
-  }, []);
-
-  useEffect(() => {
-    if (bootstrapState !== "ready") {
-      return;
-    }
-
-    void syncSurface(surfaceMode);
-  }, [bootstrapState, surfaceMode]);
-
-  async function syncSurface(nextSurface: SurfaceMode) {
-    if (nextSurface === "overlay") {
-      await window.jarvisDesktop.showOverlay();
-      return;
-    }
-
-    if (nextSurface === "orb") {
-      await window.jarvisDesktop.showOrb();
-      return;
-    }
-
-    await window.jarvisDesktop.hideSurface();
-  }
+  }, [session]);
 
   async function loadBootstrapState() {
+    if (!isAuthConfigured) {
+      setBootstrapState("auth");
+      return;
+    }
+
+    if (!session) {
+      setBootstrapPayload(null);
+      setBootstrapState("auth");
+      await window.jarvisDesktop.updateRuntimeConfig({
+        apiBaseUrl: "",
+        nativeWakeAccessKey: ""
+      });
+      return;
+    }
+
+    try {
+      setBootstrapState("bootstrap");
+      setBootstrapError("");
+      const payload = await fetchBootstrap(session);
+      setBootstrapPayload(payload);
+      await window.jarvisDesktop.updateRuntimeConfig({
+        apiBaseUrl: payload.runtime.apiBaseUrl,
+        nativeWakeAccessKey: payload.runtime.nativeWakeAccessKey
+      });
+    } catch (error) {
+      setBootstrapError(error instanceof Error ? error.message : "Bootstrap failed.");
+      setBootstrapState("auth");
+      return;
+    }
+
     const nextState = await window.jarvisDesktop.getBootstrapState();
     setMicrophoneStatus(nextState.microphoneStatus);
     setBootstrapState(nextState.setupComplete ? "ready" : "setup");
@@ -175,7 +208,10 @@ export function App() {
 
   async function handleClose() {
     dismissSurface();
-    await window.jarvisDesktop.hideSurface();
+  }
+
+  async function handleActivateListening() {
+    await activateListening();
   }
 
   if (bootstrapState === "loading") {
@@ -185,6 +221,44 @@ export function App() {
           <div className="hero-orb" aria-hidden="true" />
           <div className="status-pill">Preparing Jarvis</div>
         </section>
+      </main>
+    );
+  }
+
+  if (bootstrapState === "bootstrap") {
+    return (
+      <main className="app-shell app-shell-setup">
+        <section className="overlay-card">
+          <div className="hero-orb" aria-hidden="true" />
+          <div className="status-pill">Provisioning Jarvis</div>
+          <p className="hero-copy">
+            Signing you in, fetching your runtime config, and preparing Jarvis for this laptop.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  if (bootstrapState === "auth") {
+    return (
+      <main className="app-shell app-shell-setup">
+        {isAuthConfigured ? (
+          <AuthView
+            error={bootstrapError || authError}
+            isBusy={isAuthBusy}
+            isGoogleEnabled={isGoogleEnabled}
+            onGoogle={signInWithGoogle}
+          />
+        ) : (
+          <section className="overlay-card setup-card">
+            <div className="hero-orb" aria-hidden="true" />
+            <div className="status-pill status-error">Auth not configured</div>
+            <p className="hero-copy">
+              Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to enable sign in, sign up, and
+              Google OAuth in the app.
+            </p>
+          </section>
+        )}
       </main>
     );
   }
@@ -206,6 +280,12 @@ export function App() {
   if (surfaceMode === "overlay") {
     return (
       <main className="app-shell app-shell-overlay">
+        <div className="session-bar">
+          <span>{bootstrapPayload?.user.email}</span>
+          <button className="ghost-button" onClick={() => void signOut()} type="button">
+            Sign Out
+          </button>
+        </div>
         <OverlayCard
           transcript={transcript}
           result={result}
@@ -220,12 +300,39 @@ export function App() {
 
   return (
     <main className="app-shell app-shell-orb">
+      <div className="session-bar">
+        <span>{bootstrapPayload?.user.email}</span>
+        <button className="ghost-button" onClick={() => void signOut()} type="button">
+          Sign Out
+        </button>
+      </div>
       <VoiceOrb
         transcript={transcript}
         stateLabel={getStateLabel(voiceState)}
         voiceState={voiceState}
-        error={error}
+        error={error || getWakeStatusHint(nativeWakeEnabled, nativeWakeStatus)}
       />
+      {nativeWakeEnabled ? null : (
+        <button className="manual-activate-button" onClick={handleActivateListening} type="button">
+          Start Jarvis
+        </button>
+      )}
     </main>
   );
+}
+
+function getWakeStatusHint(nativeWakeEnabled: boolean, nativeWakeStatus: string) {
+  if (nativeWakeEnabled) {
+    return "";
+  }
+
+  if (nativeWakeStatus === "missing_access_key") {
+    return "Native wake engine is waiting for PICOVOICE_ACCESS_KEY. You can still test with the Start Jarvis button.";
+  }
+
+  if (nativeWakeStatus === "init_failed") {
+    return "Native wake engine could not start. Use the Start Jarvis button while we check the device setup.";
+  }
+
+  return "";
 }
