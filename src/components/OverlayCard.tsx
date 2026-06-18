@@ -35,6 +35,7 @@ function getStateClassName(voiceState: string) {
 
 export function OverlayCard(props: OverlayCardProps) {
   const { transcript, result, stateLabel, voiceState, error, onClose } = props;
+  const followUpPrompts = result?.followUpPrompts || [];
 
   return (
     <section className="overlay-card">
@@ -89,6 +90,13 @@ export function OverlayCard(props: OverlayCardProps) {
             <section>
               <p className="panel-label">Reference Images</p>
               <div className="image-grid">{result.images.map(renderImage)}</div>
+            </section>
+          ) : null}
+
+          {followUpPrompts.length > 0 ? (
+            <section className="command-panel">
+              <p className="panel-label">Good Follow-Ups</p>
+              <ul className="panel-list">{followUpPrompts.map(renderFinding)}</ul>
             </section>
           ) : null}
         </article>

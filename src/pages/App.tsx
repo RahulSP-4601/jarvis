@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { OverlayCard } from "../components/OverlayCard";
+import { VoiceOrb } from "../components/VoiceOrb";
 import { useVoiceSession } from "../hooks/useVoiceSession";
 
 type BootstrapState = "loading" | "setup" | "ready";
+type SurfaceMode = "hidden" | "orb" | "overlay";
 
 function getStateLabel(state: string) {
   if (state === "waiting") return "Waiting for you";
@@ -45,14 +47,14 @@ function SetupView(props: {
       <header className="overlay-header">
         <div>
           <p className="eyebrow">Jarvis First Launch</p>
-          <h1>Let Jarvis hear you once, then stay out of the way.</h1>
+          <h1>Let Jarvis hear you once, then stay available like a quiet partner.</h1>
         </div>
       </header>
 
       <section className="hero-panel">
         <div className="status-row">
           <div className="status-pill status-setup">Setup in progress</div>
-          <p className="muted-text">Voice-first desktop research assistant</p>
+          <p className="muted-text">Voice-first desktop chief of staff</p>
         </div>
 
         <p className="hero-copy">{getSetupHint(microphoneStatus)}</p>
@@ -67,9 +69,9 @@ function SetupView(props: {
         <article className="command-panel">
           <p className="panel-label">What Jarvis Does</p>
           <ul className="panel-list">
-            <li>Waits for you in the background.</li>
+            <li>Runs in the background after setup.</li>
             <li>Listens when you say "Hey Jarvis".</li>
-            <li>Speaks the answer first and shows details only when asked.</li>
+            <li>Speaks first, then shows the full brief only when asked.</li>
           </ul>
         </article>
       </section>
@@ -101,13 +103,35 @@ export function App() {
   const [bootstrapState, setBootstrapState] = useState<BootstrapState>("loading");
   const [microphoneStatus, setMicrophoneStatus] = useState("unknown");
   const [setupError, setSetupError] = useState("");
-  const { voiceState, transcript, result, error, hideOverlay } = useVoiceSession(
+  const { voiceState, surfaceMode, transcript, result, error, dismissSurface } = useVoiceSession(
     bootstrapState === "ready"
   );
 
   useEffect(() => {
     void loadBootstrapState();
   }, []);
+
+  useEffect(() => {
+    if (bootstrapState !== "ready") {
+      return;
+    }
+
+    void syncSurface(surfaceMode);
+  }, [bootstrapState, surfaceMode]);
+
+  async function syncSurface(nextSurface: SurfaceMode) {
+    if (nextSurface === "overlay") {
+      await window.jarvisDesktop.showOverlay();
+      return;
+    }
+
+    if (nextSurface === "orb") {
+      await window.jarvisDesktop.showOrb();
+      return;
+    }
+
+    await window.jarvisDesktop.hideSurface();
+  }
 
   async function loadBootstrapState() {
     const nextState = await window.jarvisDesktop.getBootstrapState();
@@ -150,12 +174,13 @@ export function App() {
   }
 
   async function handleClose() {
-    await hideOverlay();
+    dismissSurface();
+    await window.jarvisDesktop.hideSurface();
   }
 
   if (bootstrapState === "loading") {
     return (
-      <main className="app-shell">
+      <main className="app-shell app-shell-setup">
         <section className="overlay-card">
           <div className="hero-orb" aria-hidden="true" />
           <div className="status-pill">Preparing Jarvis</div>
@@ -166,7 +191,7 @@ export function App() {
 
   if (bootstrapState === "setup") {
     return (
-      <main className="app-shell">
+      <main className="app-shell app-shell-setup">
         <SetupView
           microphoneStatus={microphoneStatus}
           error={setupError}
@@ -178,15 +203,28 @@ export function App() {
     );
   }
 
+  if (surfaceMode === "overlay") {
+    return (
+      <main className="app-shell app-shell-overlay">
+        <OverlayCard
+          transcript={transcript}
+          result={result}
+          stateLabel={getStateLabel(voiceState)}
+          voiceState={voiceState}
+          error={error}
+          onClose={handleClose}
+        />
+      </main>
+    );
+  }
+
   return (
-    <main className="app-shell">
-      <OverlayCard
+    <main className="app-shell app-shell-orb">
+      <VoiceOrb
         transcript={transcript}
-        result={result}
         stateLabel={getStateLabel(voiceState)}
         voiceState={voiceState}
         error={error}
-        onClose={handleClose}
       />
     </main>
   );

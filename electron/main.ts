@@ -15,10 +15,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged;
 const setupStateFile = path.join(app.getPath("userData"), "jarvis-state.json");
+const overlayInset = 24;
 
 type SetupState = {
   setupComplete: boolean;
 };
+
+type SurfaceMode = "setup" | "orb" | "overlay";
 
 function readSetupState(): SetupState {
   try {
@@ -34,25 +37,43 @@ function writeSetupState(nextState: SetupState) {
   fs.writeFileSync(setupStateFile, JSON.stringify(nextState, null, 2), "utf8");
 }
 
-function getOverlaySize() {
-  const width = Number(process.env.JARVIS_OVERLAY_WIDTH || 460);
-  const height = Number(process.env.JARVIS_OVERLAY_HEIGHT || 720);
-
-  return { width, height };
+function getWorkArea() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  return primaryDisplay.workArea;
 }
 
-function getOverlayPosition(width: number) {
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { workArea } = primaryDisplay;
-  const x = workArea.x + workArea.width - width - 24;
-  const y = workArea.y + 24;
+function getSurfaceSize(surface: SurfaceMode) {
+  if (surface === "orb") {
+    return {
+      width: Number(process.env.JARVIS_ORB_WIDTH || 420),
+      height: Number(process.env.JARVIS_ORB_HEIGHT || 168)
+    };
+  }
 
-  return { x, y };
+  if (surface === "setup") {
+    return {
+      width: Number(process.env.JARVIS_SETUP_WIDTH || 520),
+      height: Number(process.env.JARVIS_SETUP_HEIGHT || 640)
+    };
+  }
+
+  return {
+    width: Number(process.env.JARVIS_OVERLAY_WIDTH || 500),
+    height: Number(process.env.JARVIS_OVERLAY_HEIGHT || 760)
+  };
+}
+
+function getSurfaceBounds(surface: SurfaceMode) {
+  const { width, height } = getSurfaceSize(surface);
+  const workArea = getWorkArea();
+  const x = workArea.x + workArea.width - width - overlayInset;
+  const y = surface === "orb" ? workArea.y + overlayInset : workArea.y + overlayInset;
+
+  return { x, y, width, height };
 }
 
 function createOverlayWindow() {
-  const { width, height } = getOverlaySize();
-  const { x, y } = getOverlayPosition(width);
+  const { x, y, width, height } = getSurfaceBounds("setup");
   const window = new BrowserWindow({
     width,
     height,
@@ -72,6 +93,9 @@ function createOverlayWindow() {
       backgroundThrottling: false
     }
   });
+  window.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true
+  });
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   if (rendererUrl) {
@@ -83,6 +107,14 @@ function createOverlayWindow() {
   }
 
   return window;
+}
+
+function showSurface(window: BrowserWindow, surface: SurfaceMode) {
+  const bounds = getSurfaceBounds(surface);
+  window.setBounds(bounds);
+  window.showInactive();
+  window.setAlwaysOnTop(true, "floating");
+  window.focus();
 }
 
 function registerShortcuts(window: BrowserWindow) {
@@ -132,11 +164,14 @@ app.whenReady().then(() => {
   registerShortcuts(overlayWindow);
 
   ipcMain.handle("jarvis:show-overlay", () => {
-    overlayWindow.show();
-    overlayWindow.focus();
+    showSurface(overlayWindow, "overlay");
   });
 
-  ipcMain.handle("jarvis:hide-overlay", () => {
+  ipcMain.handle("jarvis:show-orb", () => {
+    showSurface(overlayWindow, "orb");
+  });
+
+  ipcMain.handle("jarvis:hide-surface", () => {
     overlayWindow.hide();
   });
 
@@ -161,8 +196,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("jarvis:mark-setup-complete", () => {
     writeSetupState({ setupComplete: true });
-    overlayWindow.show();
-    overlayWindow.focus();
+    overlayWindow.hide();
   });
 
   ipcMain.handle("jarvis:reset-setup", () => {
@@ -177,8 +211,7 @@ app.whenReady().then(() => {
       return;
     }
 
-    overlayWindow.show();
-    overlayWindow.focus();
+    showSurface(overlayWindow, "setup");
   });
 });
 

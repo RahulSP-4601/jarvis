@@ -26,7 +26,8 @@ declare global {
   interface Window {
     jarvisDesktop: {
       showOverlay: () => Promise<void>;
-      hideOverlay: () => Promise<void>;
+      showOrb: () => Promise<void>;
+      hideSurface: () => Promise<void>;
       getBootstrapState: () => Promise<{
         setupComplete: boolean;
         microphoneStatus: string;

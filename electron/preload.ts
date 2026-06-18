@@ -2,7 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 
 const jarvisDesktop = {
   showOverlay: () => ipcRenderer.invoke("jarvis:show-overlay"),
-  hideOverlay: () => ipcRenderer.invoke("jarvis:hide-overlay"),
+  showOrb: () => ipcRenderer.invoke("jarvis:show-orb"),
+  hideSurface: () => ipcRenderer.invoke("jarvis:hide-surface"),
   getBootstrapState: () => ipcRenderer.invoke("jarvis:get-bootstrap-state"),
   requestMicrophoneAccess: () => ipcRenderer.invoke("jarvis:request-microphone-access"),
   openMicrophoneSettings: () => ipcRenderer.invoke("jarvis:open-microphone-settings"),

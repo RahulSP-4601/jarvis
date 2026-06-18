@@ -6,4 +6,6 @@ export type ResearchResponse = {
   keyFindings: string[];
   recommendation: string;
   images: string[];
+  spokenAnswer?: string;
+  followUpPrompts?: string[];
 };

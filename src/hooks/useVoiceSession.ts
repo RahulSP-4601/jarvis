@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { requestResearch } from "../services/research";
 import type { ResearchResponse } from "../types/research";
 
 type VoiceState = "idle" | "waiting" | "listening" | "thinking" | "speaking" | "ready" | "error";
+type SurfaceMode = "hidden" | "orb" | "overlay";
 type SpeechRecognitionCtor = new () => SpeechRecognition;
 
 type VoiceRuntime = {
@@ -12,9 +13,19 @@ type VoiceRuntime = {
   resume: () => void;
 };
 
+const orbHideDelayMs = 12000;
+
 function getSpeechRecognitionCtor() {
   const recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   return recognition as SpeechRecognitionCtor | undefined;
+}
+
+function getRecognitionLanguage() {
+  return navigator.languages?.[0] || navigator.language || "en-US";
+}
+
+function getAcceptedLocales() {
+  return navigator.languages?.length ? [...navigator.languages] : [getRecognitionLanguage()];
 }
 
 function normalizeTranscript(transcript: string) {
@@ -44,11 +55,15 @@ function isShowDetailsCommand(transcript: string) {
     "show me that",
     "put it on screen",
     "open the report",
-    "open that"
+    "open that",
+    "details dikhao",
+    "report dikhao",
+    "vigato batao",
+    "details batao"
   ]);
 }
 
-function isCloseOverlayCommand(transcript: string) {
+function isCloseSurfaceCommand(transcript: string) {
   return includesAnyPhrase(transcript, [
     "close this",
     "close it",
@@ -56,7 +71,10 @@ function isCloseOverlayCommand(transcript: string) {
     "hide jarvis",
     "hide that",
     "dismiss this",
-    "okay close it"
+    "okay close it",
+    "band karo",
+    "hide karo",
+    "બંધ કરો"
   ]);
 }
 
@@ -72,6 +90,7 @@ function pickPreferredVoice() {
 
   return (
     voices.find((voice) => /samantha|ava|allison|daniel/i.test(voice.name)) ||
+    voices.find((voice) => voice.lang.toLowerCase().startsWith(getRecognitionLanguage().slice(0, 2))) ||
     voices.find((voice) => voice.lang.toLowerCase().startsWith("en")) ||
     voices[0]
   );
@@ -85,27 +104,33 @@ function createFriendlySpeech(text: string) {
     utterance.voice = voice;
   }
 
-  utterance.rate = 1;
+  utterance.rate = 0.98;
   utterance.pitch = 0.95;
   return utterance;
 }
 
-async function pauseFor(durationMs: number) {
-  await new Promise((resolve) => window.setTimeout(resolve, durationMs));
+function clearTimer(timerRef: MutableRefObject<number | null>) {
+  if (timerRef.current !== null) {
+    window.clearTimeout(timerRef.current);
+    timerRef.current = null;
+  }
 }
 
 export function useVoiceSession(enabled: boolean) {
   const runtimeRef = useRef<VoiceRuntime | null>(null);
   const awaitingPromptRef = useRef(false);
+  const followUpOpenRef = useRef(false);
   const latestResultRef = useRef<ResearchResponse | null>(null);
+  const hideOrbTimerRef = useRef<number | null>(null);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>("hidden");
   const [transcript, setTranscript] = useState("");
   const [result, setResult] = useState<ResearchResponse | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!enabled) {
-      resetSessionState(setVoiceState, setTranscript, setResult, setError);
+      clearSessionState();
       return;
     }
 
@@ -113,6 +138,7 @@ export function useVoiceSession(enabled: boolean) {
     if (!RecognitionCtor) {
       setVoiceState("error");
       setError("Speech recognition is not available in this environment.");
+      setSurfaceMode("orb");
       return;
     }
 
@@ -124,6 +150,7 @@ export function useVoiceSession(enabled: boolean) {
       onRestartFailure: () => {
         setVoiceState("error");
         setError("Jarvis could not restart background listening.");
+        setSurfaceMode("orb");
       },
       onListening: () => {
         setVoiceState("waiting");
@@ -137,32 +164,45 @@ export function useVoiceSession(enabled: boolean) {
     return () => {
       runtime.stop();
       runtimeRef.current = null;
+      clearSessionState();
       window.speechSynthesis?.cancel();
     };
   }, [enabled]);
 
   async function handleTranscript(nextTranscript: string) {
+    clearTimer(hideOrbTimerRef);
     setError("");
 
-    if (isCloseOverlayCommand(nextTranscript)) {
+    if (isCloseSurfaceCommand(nextTranscript)) {
+      followUpOpenRef.current = false;
       setResult(null);
-      latestResultRef.current = null;
+      setSurfaceMode("hidden");
       setVoiceState("waiting");
-      await window.jarvisDesktop.hideOverlay();
-      await speak(runtimeRef.current, setVoiceState, "Alright. I'll get out of the way.");
+      await speak(runtimeRef.current, setVoiceState, "Alright. I'll step back.", "waiting");
       return;
     }
 
     if (isShowDetailsCommand(nextTranscript) && latestResultRef.current) {
       setResult(latestResultRef.current);
-      setVoiceState("ready");
-      await window.jarvisDesktop.showOverlay();
-      await speak(runtimeRef.current, setVoiceState, "I've put the details on screen.");
+      setSurfaceMode("overlay");
+      await speak(
+        runtimeRef.current,
+        setVoiceState,
+        "I've opened the full brief on screen.",
+        "ready"
+      );
       return;
     }
 
     if (isShowDetailsCommand(nextTranscript)) {
-      await speak(runtimeRef.current, setVoiceState, "I don't have anything recent to show yet.");
+      setSurfaceMode("orb");
+      await speak(
+        runtimeRef.current,
+        setVoiceState,
+        "I don't have a recent brief ready yet.",
+        "waiting"
+      );
+      scheduleOrbHide();
       return;
     }
 
@@ -172,10 +212,17 @@ export function useVoiceSession(enabled: boolean) {
       return;
     }
 
+    if (followUpOpenRef.current && nextTranscript.length > 0) {
+      await runResearch(nextTranscript);
+      return;
+    }
+
     const wakeCommand = extractWakeCommand(nextTranscript);
     if (wakeCommand === null) {
       return;
     }
+
+    setSurfaceMode("orb");
 
     if (wakeCommand.length > 0) {
       await runResearch(wakeCommand);
@@ -184,25 +231,40 @@ export function useVoiceSession(enabled: boolean) {
 
     awaitingPromptRef.current = true;
     setVoiceState("listening");
-    await speak(runtimeRef.current, setVoiceState, "I'm here. Go ahead.");
+    await speak(runtimeRef.current, setVoiceState, "I'm here. Go ahead.", "listening");
   }
 
   async function runResearch(command: string) {
+    setSurfaceMode("orb");
     setVoiceState("thinking");
     setTranscript(command);
 
     try {
-      const response = await requestResearch(command);
+      const response = await requestResearch({
+        transcript: command,
+        locale: getRecognitionLanguage(),
+        acceptedLocales: getAcceptedLocales()
+      });
+
       latestResultRef.current = response;
-      setVoiceState("ready");
-      setResult(response.action === "respond" ? null : null);
+      followUpOpenRef.current = true;
+      setResult(null);
 
       if (response.action === "hide_overlay") {
-        await window.jarvisDesktop.hideOverlay();
+        setSurfaceMode("hidden");
+      } else {
+        setSurfaceMode("orb");
       }
 
-      await speak(runtimeRef.current, setVoiceState, response.summary);
+      await speak(
+        runtimeRef.current,
+        setVoiceState,
+        response.spokenAnswer || response.summary,
+        "ready"
+      );
+      scheduleOrbHide();
     } catch (requestError) {
+      setSurfaceMode("orb");
       setVoiceState("error");
       setError(
         requestError instanceof Error
@@ -212,30 +274,40 @@ export function useVoiceSession(enabled: boolean) {
     }
   }
 
-  async function hideOverlay() {
+  function dismissSurface() {
+    clearTimer(hideOrbTimerRef);
+    followUpOpenRef.current = false;
     setResult(null);
-    await window.jarvisDesktop.hideOverlay();
+    setSurfaceMode("hidden");
+  }
+
+  function clearSessionState() {
+    clearTimer(hideOrbTimerRef);
+    awaitingPromptRef.current = false;
+    followUpOpenRef.current = false;
+    setVoiceState("idle");
+    setSurfaceMode("hidden");
+    setTranscript("");
+    setResult(null);
+    setError("");
+  }
+
+  function scheduleOrbHide() {
+    clearTimer(hideOrbTimerRef);
+    hideOrbTimerRef.current = window.setTimeout(() => {
+      followUpOpenRef.current = false;
+      setSurfaceMode((currentMode) => (currentMode === "overlay" ? currentMode : "hidden"));
+    }, orbHideDelayMs);
   }
 
   return {
     voiceState,
+    surfaceMode,
     transcript,
     result,
     error,
-    hideOverlay
+    dismissSurface
   };
-}
-
-function resetSessionState(
-  setVoiceState: (value: VoiceState) => void,
-  setTranscript: (value: string) => void,
-  setResult: (value: ResearchResponse | null) => void,
-  setError: (value: string) => void
-) {
-  setVoiceState("idle");
-  setTranscript("");
-  setResult(null);
-  setError("");
 }
 
 function createVoiceRuntime(
@@ -252,7 +324,7 @@ function createVoiceRuntime(
 
   recognition.continuous = true;
   recognition.interimResults = false;
-  recognition.lang = "en-US";
+  recognition.lang = getRecognitionLanguage();
 
   recognition.onresult = (event: SpeechRecognitionEvent) => {
     const lastResult = event.results[event.results.length - 1];
@@ -321,7 +393,8 @@ function createVoiceRuntime(
 async function speak(
   runtime: VoiceRuntime | null,
   setVoiceState: (value: VoiceState) => void,
-  text: string
+  text: string,
+  nextState: VoiceState
 ) {
   if (!("speechSynthesis" in window) || text === "") {
     return;
@@ -338,7 +411,6 @@ async function speak(
     window.speechSynthesis.speak(utterance);
   });
 
-  await pauseFor(180);
   runtime?.resume();
-  setVoiceState("waiting");
+  setVoiceState(nextState);
 }
