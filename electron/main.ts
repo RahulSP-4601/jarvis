@@ -161,6 +161,34 @@ function resolveApiBaseUrl() {
   return process.env.JARVIS_API_BASE_URL || process.env.VITE_JARVIS_API_BASE_URL || "http://localhost:8080";
 }
 
+function resolveWakeDaemonScriptPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "scripts", "openwakeword_daemon.py");
+  }
+
+  return path.join(process.cwd(), "scripts", "openwakeword_daemon.py");
+}
+
+function resolvePackagedWakeExecutablePath() {
+  const executableName = process.platform === "win32" ? "jarvis-wake.exe" : "jarvis-wake";
+  return path.join(process.resourcesPath, "wake", executableName);
+}
+
+function resolveWakeLaunch() {
+  if (app.isPackaged) {
+    return {
+      command: resolvePackagedWakeExecutablePath(),
+      args: []
+    };
+  }
+
+  const pythonBin = process.env.OPENWAKEWORD_PYTHON_BIN || "python3";
+  return {
+    command: pythonBin,
+    args: [resolveWakeDaemonScriptPath()]
+  };
+}
+
 function registerShortcuts(window: BrowserWindow, runtime: AssistantRuntime) {
   globalShortcut.register("CommandOrControl+Shift+J", () => {
     if (window.isVisible()) {
@@ -190,11 +218,14 @@ app.whenReady().then(() => {
   syncLoginItemSettings(readSetupState().setupComplete);
 
   const assistantWindow = createAssistantWindow();
+  const wakeLaunch = resolveWakeLaunch();
   const runtime = new AssistantRuntime(
     assistantWindow,
     {
       apiBaseUrl: resolveApiBaseUrl(),
-      nativeWakeAccessKey: process.env.PICOVOICE_ACCESS_KEY || ""
+      nativeWakeProvider: process.env.JARVIS_WAKE_PROVIDER || "openwakeword",
+      wakeLaunchCommand: wakeLaunch.command,
+      wakeLaunchArgs: wakeLaunch.args
     },
     (surface) => {
       if (surface === "hidden") {
@@ -309,12 +340,10 @@ app.whenReady().then(() => {
       _event,
       payload: {
         apiBaseUrl?: string;
-        nativeWakeAccessKey?: string;
       }
     ) => {
       await runtime.updateRuntimeConfig({
-        apiBaseUrl: payload.apiBaseUrl || "",
-        nativeWakeAccessKey: payload.nativeWakeAccessKey || ""
+        apiBaseUrl: payload.apiBaseUrl || ""
       });
     }
   );

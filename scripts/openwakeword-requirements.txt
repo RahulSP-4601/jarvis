@@ -1,0 +1,5 @@
+numpy
+openwakeword
+onnxruntime
+pyinstaller
+sounddevice

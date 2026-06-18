@@ -34,7 +34,7 @@ const jarvisDesktop = {
   markSetupComplete: () => ipcRenderer.invoke("jarvis:mark-setup-complete"),
   resetSetup: () => ipcRenderer.invoke("jarvis:reset-setup"),
   activateListening: () => ipcRenderer.invoke("jarvis:activate-listening"),
-  updateRuntimeConfig: (payload: { apiBaseUrl?: string; nativeWakeAccessKey?: string }) =>
+  updateRuntimeConfig: (payload: { apiBaseUrl?: string }) =>
     ipcRenderer.invoke("jarvis:update-runtime-config", payload),
   notifySpeechFinished: (speechRequestId: number) =>
     ipcRenderer.invoke("jarvis:notify-speech-finished", speechRequestId),

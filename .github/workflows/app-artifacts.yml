@@ -26,6 +26,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -35,7 +40,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install wake runtime dependencies
+        run: python -m pip install -r scripts/openwakeword-requirements.txt
+
       - name: Build app bundles
+        env:
+          VITE_JARVIS_API_BASE_URL: ${{ secrets.VITE_JARVIS_API_BASE_URL }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_JARVIS_AUTH_REDIRECT_URL: ${{ secrets.VITE_JARVIS_AUTH_REDIRECT_URL }}
         run: npm run dist:${{ matrix.target }}
 
       - name: Upload installable artifacts

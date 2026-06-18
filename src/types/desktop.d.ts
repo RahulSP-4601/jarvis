@@ -50,10 +50,7 @@ declare global {
       markSetupComplete: () => Promise<void>;
       resetSetup: () => Promise<void>;
       activateListening: () => Promise<void>;
-      updateRuntimeConfig: (payload: {
-        apiBaseUrl?: string;
-        nativeWakeAccessKey?: string;
-      }) => Promise<void>;
+      updateRuntimeConfig: (payload: { apiBaseUrl?: string }) => Promise<void>;
       notifySpeechFinished: (speechRequestId: number) => Promise<void>;
       onAuthCallback: (listener: (url: string) => void) => () => void;
       onAssistantState: (

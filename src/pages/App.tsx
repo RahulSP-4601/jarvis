@@ -146,8 +146,7 @@ export function App() {
       setBootstrapPayload(null);
       setBootstrapState("auth");
       await window.jarvisDesktop.updateRuntimeConfig({
-        apiBaseUrl: "",
-        nativeWakeAccessKey: ""
+        apiBaseUrl: ""
       });
       return;
     }
@@ -158,8 +157,7 @@ export function App() {
       const payload = await fetchBootstrap(session);
       setBootstrapPayload(payload);
       await window.jarvisDesktop.updateRuntimeConfig({
-        apiBaseUrl: payload.runtime.apiBaseUrl,
-        nativeWakeAccessKey: payload.runtime.nativeWakeAccessKey
+        apiBaseUrl: payload.runtime.apiBaseUrl
       });
     } catch (error) {
       setBootstrapError(error instanceof Error ? error.message : "Bootstrap failed.");
@@ -326,12 +324,12 @@ function getWakeStatusHint(nativeWakeEnabled: boolean, nativeWakeStatus: string)
     return "";
   }
 
-  if (nativeWakeStatus === "missing_access_key") {
-    return "Native wake engine is waiting for PICOVOICE_ACCESS_KEY. You can still test with the Start Jarvis button.";
+  if (nativeWakeStatus === "unsupported_provider") {
+    return "Jarvis wake provider is not supported in this build. Use the Start Jarvis button for now.";
   }
 
   if (nativeWakeStatus === "init_failed") {
-    return "Native wake engine could not start. Use the Start Jarvis button while we check the device setup.";
+    return "Native wake engine could not start. Check the local wake daemon setup, or use the Start Jarvis button.";
   }
 
   return "";

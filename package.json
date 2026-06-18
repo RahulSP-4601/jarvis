@@ -11,16 +11,15 @@
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "dist": "npm run build && electron-builder --publish never",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis zip --publish never",
+    "build:wake-runtime": "node scripts/build-wake-runtime.mjs",
+    "dist": "npm run build:wake-runtime && npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build:wake-runtime && npm run build && electron-builder --mac dmg zip --publish never",
+    "dist:win": "npm run build:wake-runtime && npm run build && electron-builder --win nsis zip --publish never",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "test": "vitest run"
   },
   "dependencies": {
-    "@picovoice/porcupine-node": "^4.0.2",
-    "@picovoice/pvrecorder-node": "^1.2.9",
     "@supabase/supabase-js": "^2.108.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -49,6 +48,12 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/wake",
+        "to": "wake"
+      }
     ],
     "extraMetadata": {
       "main": "dist-electron/main.js"

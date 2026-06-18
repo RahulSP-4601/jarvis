@@ -1,6 +1,6 @@
 import type { BrowserWindow } from "electron";
-import { BuiltinKeyword, Porcupine } from "@picovoice/porcupine-node";
-import { PvRecorder } from "@picovoice/pvrecorder-node";
+import fs from "node:fs/promises";
+import { OpenWakeWordBridge, type WakeEvent } from "./openWakeWordBridge.js";
 
 export type VoiceState = "idle" | "waiting" | "listening" | "thinking" | "speaking" | "ready" | "error";
 export type SurfaceMode = "hidden" | "orb" | "overlay";
@@ -31,16 +31,14 @@ export type AssistantState = {
 
 type RuntimeConfig = {
   apiBaseUrl: string;
-  nativeWakeAccessKey: string;
+  nativeWakeProvider: string;
+  wakeLaunchArgs: string[];
+  wakeLaunchCommand: string;
 };
 
-type CaptureMode = "idle" | "wake" | "command" | "followup" | "thinking" | "speaking";
+type CaptureMode = "idle" | "wake" | "followup" | "thinking" | "speaking";
 
 const followUpTimeoutMs = 12000;
-const maxUtteranceMs = 20000;
-const speechStartTimeoutMs = 5000;
-const silenceWindowMs = 1200;
-const amplitudeThreshold = 900;
 
 function createInitialState(): AssistantState {
   return {
@@ -58,18 +56,13 @@ function createInitialState(): AssistantState {
 
 export class AssistantRuntime {
   private readonly window: BrowserWindow;
-  private config: RuntimeConfig;
   private readonly onSurfaceChange: (surface: SurfaceMode) => void;
+  private config: RuntimeConfig;
   private state = createInitialState();
-  private recorder: PvRecorder | null = null;
-  private porcupine: Porcupine | null = null;
   private running = false;
   private captureMode: CaptureMode = "idle";
   private setupComplete = false;
-  private shouldStop = false;
-  private utteranceFrames: Int16Array[] = [];
-  private utteranceStartedAt = 0;
-  private lastSpeechAt = 0;
+  private wakeBridge: OpenWakeWordBridge | null = null;
   private activeRequest: AbortController | null = null;
   private followUpTimer: NodeJS.Timeout | null = null;
   private pendingSpeechAfterResponse = false;
@@ -93,7 +86,11 @@ export class AssistantRuntime {
 
     if (!setupComplete) {
       await this.stop();
-      this.updateState({ voiceState: "idle", nativeWakeEnabled: false, nativeWakeStatus: "setup_required" });
+      this.updateState({
+        voiceState: "idle",
+        nativeWakeEnabled: false,
+        nativeWakeStatus: "setup_required"
+      });
       return;
     }
 
@@ -101,16 +98,14 @@ export class AssistantRuntime {
   }
 
   async updateRuntimeConfig(patch: Partial<RuntimeConfig>) {
-    const nextConfig = {
-      ...this.config,
-      ...patch
-    };
+    const nextConfig = { ...this.config, ...patch };
     const shouldRestart =
       this.config.apiBaseUrl !== nextConfig.apiBaseUrl ||
-      this.config.nativeWakeAccessKey !== nextConfig.nativeWakeAccessKey;
+      this.config.nativeWakeProvider !== nextConfig.nativeWakeProvider ||
+      this.config.wakeLaunchCommand !== nextConfig.wakeLaunchCommand ||
+      this.config.wakeLaunchArgs.join("\n") !== nextConfig.wakeLaunchArgs.join("\n");
 
     this.config = nextConfig;
-
     if (!shouldRestart) {
       return;
     }
@@ -126,25 +121,25 @@ export class AssistantRuntime {
       return;
     }
 
-    if (!this.config.nativeWakeAccessKey) {
+    if (this.config.nativeWakeProvider !== "openwakeword") {
       this.updateState({
         voiceState: "waiting",
         nativeWakeEnabled: false,
-        nativeWakeStatus: "missing_access_key"
+        nativeWakeStatus: "unsupported_provider"
       });
       return;
     }
 
     try {
-      this.porcupine = new Porcupine(
-        this.config.nativeWakeAccessKey,
-        [BuiltinKeyword.JARVIS],
-        [0.65]
-      );
-      this.recorder = new PvRecorder(this.porcupine.frameLength);
-      this.recorder.start();
+      this.wakeBridge = new OpenWakeWordBridge({
+        command: this.config.wakeLaunchCommand,
+        args: this.config.wakeLaunchArgs,
+        onEvent: (event) => {
+          void this.handleWakeEvent(event);
+        }
+      });
+      await this.wakeBridge.start();
       this.running = true;
-      this.shouldStop = false;
       this.captureMode = "wake";
       this.updateState({
         voiceState: "waiting",
@@ -152,29 +147,25 @@ export class AssistantRuntime {
         nativeWakeStatus: "ready",
         error: ""
       });
-      void this.runLoop();
     } catch (error) {
       this.updateState({
         voiceState: "error",
         nativeWakeEnabled: false,
         nativeWakeStatus: "init_failed",
-        error: error instanceof Error ? error.message : "Wake engine failed to start."
+        error: formatError(error, "Wake engine failed to start.")
       });
       await this.stop();
     }
   }
 
   async stop() {
-    this.shouldStop = true;
     this.running = false;
     this.captureMode = "idle";
     this.clearFollowUpTimer();
     this.activeRequest?.abort();
     this.activeRequest = null;
-    this.recorder?.release();
-    this.recorder = null;
-    this.porcupine?.release();
-    this.porcupine = null;
+    await this.wakeBridge?.stop();
+    this.wakeBridge = null;
   }
 
   async activateListening() {
@@ -192,14 +183,21 @@ export class AssistantRuntime {
     }
 
     this.clearFollowUpTimer();
-    this.captureMode = "command";
     this.beginUtteranceCapture("listening");
+    this.captureMode = "thinking";
+    this.wakeBridge?.sendCommand("force_capture");
   }
 
   hideSurface() {
     this.clearFollowUpTimer();
     this.captureMode = this.running ? "wake" : "idle";
-    this.updateState({ surfaceMode: "hidden", result: null, voiceState: "waiting", error: "" });
+    this.wakeBridge?.sendCommand("reset_wake");
+    this.updateState({
+      surfaceMode: "hidden",
+      result: null,
+      voiceState: "waiting",
+      error: ""
+    });
   }
 
   notifySpeechFinished(speechRequestId: number) {
@@ -211,30 +209,10 @@ export class AssistantRuntime {
     this.captureMode = "followup";
     this.scheduleFollowUpExpiry();
     this.updateState({ voiceState: "ready" });
-  }
-
-  private async runLoop() {
-    while (this.running && !this.shouldStop && this.recorder && this.porcupine) {
-      const frame = await this.recorder.read();
-
-      if (this.captureMode === "wake") {
-        if (this.porcupine.process(frame) >= 0) {
-          this.captureMode = "command";
-          this.beginUtteranceCapture("listening");
-        }
-        continue;
-      }
-
-      if (this.captureMode === "command" || this.captureMode === "followup") {
-        await this.consumeUtteranceFrame(frame);
-      }
-    }
+    this.wakeBridge?.sendCommand("force_capture");
   }
 
   private beginUtteranceCapture(voiceState: VoiceState) {
-    this.utteranceFrames = [];
-    this.utteranceStartedAt = Date.now();
-    this.lastSpeechAt = 0;
     this.updateState({
       surfaceMode: "orb",
       voiceState,
@@ -244,116 +222,110 @@ export class AssistantRuntime {
     this.onSurfaceChange("orb");
   }
 
-  private async consumeUtteranceFrame(frame: Int16Array) {
-    const now = Date.now();
-    const amplitude = peakAmplitude(frame);
-    const detectedSpeech = amplitude > amplitudeThreshold;
-
-    if (detectedSpeech) {
-      this.lastSpeechAt = now;
-    }
-
-    if (detectedSpeech || this.utteranceFrames.length > 0) {
-      this.utteranceFrames.push(frame.slice());
-    }
-
-    if (this.utteranceFrames.length === 0 && now - this.utteranceStartedAt > speechStartTimeoutMs) {
-      this.captureMode = "wake";
-      this.updateState({ voiceState: "waiting", surfaceMode: "hidden" });
-      this.onSurfaceChange("hidden");
+  private async handleWakeEvent(event: WakeEvent) {
+    if (!this.running) {
       return;
     }
 
-    if (this.utteranceFrames.length === 0) {
+    if (event.type === "error") {
+      this.updateState({
+        voiceState: "error",
+        nativeWakeEnabled: false,
+        nativeWakeStatus: "init_failed",
+        error: event.message
+      });
       return;
     }
 
-    const utteranceElapsed = now - this.utteranceStartedAt;
-    const silenceElapsed = this.lastSpeechAt > 0 ? now - this.lastSpeechAt : 0;
-    const utteranceFinished =
-      utteranceElapsed >= maxUtteranceMs ||
-      (this.lastSpeechAt > 0 && silenceElapsed >= silenceWindowMs);
-
-    if (!utteranceFinished) {
+    if (event.type === "wake") {
+      this.captureMode = "thinking";
+      this.beginUtteranceCapture("listening");
       return;
     }
 
-    const audioFrames = this.utteranceFrames;
-    this.utteranceFrames = [];
-    this.captureMode = "thinking";
-    await this.processUtterance(audioFrames);
+    await this.processUtterance(event.path);
   }
 
-  private async processUtterance(frames: Int16Array[]) {
-    const audioBuffer = wavFromFrames(frames, this.porcupine?.sampleRate || 16000);
+  private async processUtterance(audioPath: string) {
     const controller = new AbortController();
     this.activeRequest = controller;
     this.updateState({ voiceState: "thinking", surfaceMode: "orb", error: "" });
 
     try {
+      const audioBuffer = await fs.readFile(audioPath);
       const response = await this.sendAudioCommand(audioBuffer, controller.signal);
-
-      if (isCloseCommand(response.transcript)) {
-        this.updateState({
-          transcript: response.transcript,
-          result: null,
-          surfaceMode: "hidden",
-          voiceState: "waiting"
-        });
-        this.captureMode = "wake";
-        this.onSurfaceChange("hidden");
-        return;
-      }
-
-      if (isShowDetailsCommand(response.transcript) && this.state.result) {
-        this.captureMode = "speaking";
-        this.pushSpeech("I've opened the full brief on screen.", {
-          transcript: response.transcript,
-          surfaceMode: "overlay",
-          voiceState: "speaking"
-        });
-        this.onSurfaceChange("overlay");
-        return;
-      }
-
-      if (isShowDetailsCommand(response.transcript)) {
-        this.captureMode = "speaking";
-        this.pushSpeech("I don't have a recent brief ready yet.", {
-          transcript: response.transcript,
-          surfaceMode: "orb",
-          voiceState: "speaking"
-        });
-        this.onSurfaceChange("orb");
-        return;
-      }
-
-      const nextSurface = response.action === "hide_overlay" ? "hidden" : "orb";
-      this.captureMode = "speaking";
-      this.pushSpeech(response.spokenAnswer || response.summary, {
-        transcript: response.transcript,
-        result: response,
-        surfaceMode: nextSurface,
-        voiceState: "speaking",
-        error: ""
-      });
-      this.onSurfaceChange(nextSurface);
+      this.handleResponse(response);
     } catch (error) {
-      if (controller.signal.aborted) {
-        return;
+      if (!controller.signal.aborted) {
+        this.handleRequestError(error);
       }
-
-      this.captureMode = "wake";
-      this.updateState({
-        voiceState: "error",
-        surfaceMode: "orb",
-        error: error instanceof Error ? error.message : "Jarvis could not process that request."
-      });
-      this.onSurfaceChange("orb");
     } finally {
       if (this.activeRequest === controller) {
         this.activeRequest = null;
       }
+
+      await fs.unlink(audioPath).catch(() => undefined);
     }
+  }
+
+  private handleResponse(response: ResearchResponse) {
+    if (isCloseCommand(response.transcript)) {
+      this.updateState({
+        transcript: response.transcript,
+        result: null,
+        surfaceMode: "hidden",
+        voiceState: "waiting"
+      });
+      this.captureMode = "wake";
+      this.onSurfaceChange("hidden");
+      return;
+    }
+
+    if (isShowDetailsCommand(response.transcript)) {
+      this.handleShowDetails(response.transcript);
+      return;
+    }
+
+    const nextSurface = response.action === "hide_overlay" ? "hidden" : "orb";
+    this.captureMode = "speaking";
+    this.pushSpeech(response.spokenAnswer || response.summary, {
+      transcript: response.transcript,
+      result: response,
+      surfaceMode: nextSurface,
+      voiceState: "speaking",
+      error: ""
+    });
+    this.onSurfaceChange(nextSurface);
+  }
+
+  private handleShowDetails(transcript: string) {
+    this.captureMode = "speaking";
+    if (this.state.result) {
+      this.pushSpeech("I've opened the full brief on screen.", {
+        transcript,
+        surfaceMode: "overlay",
+        voiceState: "speaking"
+      });
+      this.onSurfaceChange("overlay");
+      return;
+    }
+
+    this.pushSpeech("I don't have a recent brief ready yet.", {
+      transcript,
+      surfaceMode: "orb",
+      voiceState: "speaking"
+    });
+    this.onSurfaceChange("orb");
+  }
+
+  private handleRequestError(error: unknown) {
+    this.captureMode = "wake";
+    this.updateState({
+      voiceState: "error",
+      surfaceMode: "orb",
+      error: formatError(error, "Jarvis could not process that request.")
+    });
+    this.onSurfaceChange("orb");
   }
 
   private async sendAudioCommand(audioBuffer: Buffer, signal: AbortSignal) {
@@ -387,6 +359,7 @@ export class AssistantRuntime {
     this.clearFollowUpTimer();
     this.followUpTimer = setTimeout(() => {
       this.captureMode = "wake";
+      this.wakeBridge?.sendCommand("reset_wake");
       this.updateState({ surfaceMode: "hidden", voiceState: "waiting" });
       this.onSurfaceChange("hidden");
     }, followUpTimeoutMs);
@@ -402,54 +375,13 @@ export class AssistantRuntime {
   }
 
   private updateState(patch: Partial<AssistantState>) {
-    this.state = {
-      ...this.state,
-      ...patch
-    };
+    this.state = { ...this.state, ...patch };
     this.window.webContents.send("jarvis:assistant-state", this.state);
   }
 }
 
-function peakAmplitude(frame: Int16Array) {
-  let peak = 0;
-
-  for (let index = 0; index < frame.length; index += 1) {
-    const value = Math.abs(frame[index] || 0);
-    if (value > peak) {
-      peak = value;
-    }
-  }
-
-  return peak;
-}
-
-function wavFromFrames(frames: Int16Array[], sampleRate: number) {
-  const sampleCount = frames.reduce((sum, frame) => sum + frame.length, 0);
-  const pcmBuffer = Buffer.alloc(sampleCount * 2);
-  let offset = 0;
-
-  for (const frame of frames) {
-    for (const sample of frame) {
-      pcmBuffer.writeInt16LE(sample, offset);
-      offset += 2;
-    }
-  }
-
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcmBuffer.length, 4);
-  header.write("WAVE", 8);
-  header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(pcmBuffer.length, 40);
-  return Buffer.concat([header, pcmBuffer]);
+function formatError(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function includesAnyPhrase(transcript: string, phrases: string[]) {
