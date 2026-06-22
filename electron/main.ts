@@ -427,6 +427,10 @@ app.on("window-all-closed", () => {
   return;
 });
 
+app.on("before-quit", () => {
+  isQuitting = true;
+});
+
 app.on("will-quit", () => {
   isQuitting = true;
   globalShortcut.unregisterAll();
