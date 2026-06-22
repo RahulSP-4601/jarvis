@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   globalShortcut,
   ipcMain,
   screen,
@@ -25,6 +26,8 @@ let pendingAuthCallbackUrl: string | null = null;
 type SetupState = {
   setupComplete: boolean;
 };
+
+type PresentationMode = "setup" | "background";
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -85,7 +88,7 @@ function getSurfaceBounds(surface: SurfaceMode | "setup") {
   };
 }
 
-function createAssistantWindow() {
+function createAssistantWindow(setupComplete: boolean) {
   const bounds = getSurfaceBounds("setup");
   const window = new BrowserWindow({
     ...bounds,
@@ -94,7 +97,7 @@ function createAssistantWindow() {
     transparent: true,
     resizable: false,
     alwaysOnTop: true,
-    skipTaskbar: true,
+    skipTaskbar: setupComplete,
     hasShadow: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -117,9 +120,35 @@ function createAssistantWindow() {
   return window;
 }
 
-function showSurface(window: BrowserWindow, surface: SurfaceMode | "setup") {
+function applyPresentationMode(window: BrowserWindow, mode: PresentationMode) {
+  window.setSkipTaskbar(mode === "background");
+
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  if (mode === "setup") {
+    app.dock.show();
+    return;
+  }
+
+  app.dock.hide();
+}
+
+function showSurface(
+  window: BrowserWindow,
+  surface: SurfaceMode | "setup",
+  presentationMode: PresentationMode
+) {
   window.setBounds(getSurfaceBounds(surface));
-  window.showInactive();
+  applyPresentationMode(window, presentationMode);
+
+  if (presentationMode === "setup") {
+    window.show();
+  } else {
+    window.showInactive();
+  }
+
   window.setAlwaysOnTop(true, "floating");
   window.focus();
 }
@@ -197,12 +226,12 @@ function registerShortcuts(window: BrowserWindow, runtime: AssistantRuntime) {
       return;
     }
 
-    showSurface(window, "overlay");
+    showSurface(window, "overlay", "background");
   });
 
   globalShortcut.register("CommandOrControl+Shift+Space", () => {
     if (!readSetupState().setupComplete) {
-      showSurface(window, "setup");
+      showSurface(window, "setup", "setup");
       return;
     }
 
@@ -211,13 +240,14 @@ function registerShortcuts(window: BrowserWindow, runtime: AssistantRuntime) {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === "darwin") {
-    app.dock.hide();
-  }
+  const initialSetupState = readSetupState();
+  syncLoginItemSettings(initialSetupState.setupComplete);
 
-  syncLoginItemSettings(readSetupState().setupComplete);
-
-  const assistantWindow = createAssistantWindow();
+  const assistantWindow = createAssistantWindow(initialSetupState.setupComplete);
+  applyPresentationMode(
+    assistantWindow,
+    initialSetupState.setupComplete ? "background" : "setup"
+  );
   const wakeLaunch = resolveWakeLaunch();
   const runtime = new AssistantRuntime(
     assistantWindow,
@@ -233,12 +263,12 @@ app.whenReady().then(() => {
         return;
       }
 
-      showSurface(assistantWindow, surface);
+      showSurface(assistantWindow, surface, "background");
     }
   );
 
   registerShortcuts(assistantWindow, runtime);
-  void runtime.setSetupComplete(readSetupState().setupComplete);
+  void runtime.setSetupComplete(initialSetupState.setupComplete);
 
   app.on("second-instance", (_event, argv) => {
     const authCallbackUrl = argv.find((value) => value.startsWith(`${authProtocol}://`));
@@ -248,11 +278,11 @@ app.whenReady().then(() => {
     }
 
     if (!readSetupState().setupComplete) {
-      showSurface(assistantWindow, "setup");
+      showSurface(assistantWindow, "setup", "setup");
       return;
     }
 
-    showSurface(assistantWindow, "orb");
+    showSurface(assistantWindow, "orb", "background");
   });
 
   app.on("open-url", (event, url) => {
@@ -263,7 +293,7 @@ app.whenReady().then(() => {
 
   app.on("activate", () => {
     if (!readSetupState().setupComplete) {
-      showSurface(assistantWindow, "setup");
+      showSurface(assistantWindow, "setup", "setup");
     }
   });
 
@@ -277,11 +307,11 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("jarvis:show-overlay", () => {
-    showSurface(assistantWindow, "overlay");
+    showSurface(assistantWindow, "overlay", "background");
   });
 
   ipcMain.handle("jarvis:show-orb", () => {
-    showSurface(assistantWindow, "orb");
+    showSurface(assistantWindow, "orb", "background");
   });
 
   ipcMain.handle("jarvis:hide-surface", () => {
@@ -319,6 +349,7 @@ app.whenReady().then(() => {
   ipcMain.handle("jarvis:mark-setup-complete", async () => {
     writeSetupState({ setupComplete: true });
     syncLoginItemSettings(true);
+    applyPresentationMode(assistantWindow, "background");
     assistantWindow.hide();
     await runtime.setSetupComplete(true);
   });
@@ -326,8 +357,9 @@ app.whenReady().then(() => {
   ipcMain.handle("jarvis:reset-setup", async () => {
     writeSetupState({ setupComplete: false });
     syncLoginItemSettings(false);
+    applyPresentationMode(assistantWindow, "setup");
     await runtime.setSetupComplete(false);
-    showSurface(assistantWindow, "setup");
+    showSurface(assistantWindow, "setup", "setup");
   });
 
   ipcMain.handle("jarvis:activate-listening", async () => {
@@ -360,12 +392,35 @@ app.whenReady().then(() => {
     }
 
     if (readSetupState().setupComplete) {
+      applyPresentationMode(assistantWindow, "background");
       assistantWindow.hide();
       return;
     }
 
-    showSurface(assistantWindow, "setup");
+    showSurface(assistantWindow, "setup", "setup");
   });
+
+  assistantWindow.webContents.on("did-finish-load", () => {
+    if (!readSetupState().setupComplete && !assistantWindow.isVisible()) {
+      showSurface(assistantWindow, "setup", "setup");
+    }
+  });
+
+  assistantWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL) => {
+      console.error("Jarvis renderer failed to load", {
+        errorCode,
+        errorDescription,
+        validatedURL
+      });
+      applyPresentationMode(assistantWindow, "setup");
+      dialog.showErrorBox(
+        "Jarvis failed to load",
+        `The Jarvis interface could not start.\n\n${errorDescription} (${errorCode})\n${validatedURL}`
+      );
+    }
+  );
 });
 
 app.on("window-all-closed", () => {
